@@ -5,7 +5,6 @@
 !/inputs/pins.json
 /custom/
 /dist/
-/state/
 *.log
 versions.json
 kernel.org-releases.json
