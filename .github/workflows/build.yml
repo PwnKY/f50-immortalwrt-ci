@@ -65,6 +65,11 @@ jobs:
 
       - name: Resolve the current versions
         id: resolve
+        env:
+          # The branch this harness builds on: the portable/TF branch. main has diverged
+          # (different installer and tooling) and scripts/local-adaptations.patch targets
+          # this one, so tracking main would fail the patch check by design.
+          UPSTREAM_BRANCH: clean-tf-7.2
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 https://www.kernel.org/releases.json -o release.json
@@ -79,10 +84,11 @@ jobs:
           PY
           WRT=$(curl -fsSL --retry 3 https://downloads.immortalwrt.org/releases/ \
                 | sed -n 's/.*href="\(2[0-9]\.[0-9][0-9]\.[0-9][0-9]*\)\/".*/\1/p' | sort -V | tail -1)
-          REF=$(git ls-remote https://github.com/dikeckaan/mu300-linux refs/heads/main | cut -f1)
+          REF=$(git ls-remote https://github.com/dikeckaan/mu300-linux "refs/heads/$UPSTREAM_BRANCH" | cut -f1)
+          [ -n "$WRT" ] && [ -n "$REF" ]
           echo "wrt=$WRT" >> "$GITHUB_OUTPUT"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "resolved: stable=${{ steps.resolve.outputs.stable }} lts=${{ steps.resolve.outputs.lts }} wrt=$WRT ref=$REF"
+          echo "resolved: branch=$UPSTREAM_BRANCH wrt=$WRT ref=$REF"
 
       - name: Decide whether to build
         id: decide
@@ -126,7 +132,6 @@ jobs:
             echo "building: $key (last was $last)"
           fi
           echo "build=true" >> "$GITHUB_OUTPUT"
-
   build:
     needs: plan
     if: needs.plan.outputs.build == 'true'
