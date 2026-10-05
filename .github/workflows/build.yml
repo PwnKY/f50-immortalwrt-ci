@@ -116,7 +116,7 @@ jobs:
             case "$v" in ''|*[!0-9.]*) echo "unexpected version '$v'"; exit 1;; esac
           done
           # The primary kernel tracks the stable series, the fallback the LTS series.
-          rel="iwrt$wrt-k$stable"
+          rel="immortalwrt-$wrt-k$stable"
           tag="$rel-$(date -u +%Y%m%d)"
           last=$(python3 -c 'import json;print(json.load(open("state/last-build.json"))["key"])' 2>/dev/null || echo none)
           key="$rel/$lts/$ref"
