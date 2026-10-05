@@ -41,6 +41,10 @@ on:
       - 'scripts/**'
       - 'inputs/**'
       - '.github/workflows/build.yml'
+      - '.gitignore'
+      - '.gitattributes'
+      - 'README.md'
+      - 'PROVENANCE.md'
 
 permissions:
   contents: write
