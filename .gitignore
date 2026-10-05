@@ -1,7 +1,8 @@
 # build workspace: everything below is produced by scripts/ci-build.sh
 /src/
 /kernel-src/
-/inputs/
+/inputs/*
+!/inputs/pins.json
 /custom/
 /dist/
 /state/

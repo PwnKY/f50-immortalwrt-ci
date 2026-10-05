@@ -1,0 +1,30 @@
+{
+  "upstream": {
+    "repo": "https://github.com/dikeckaan/mu300-linux",
+    "commit": "35a1c5503303bf47870ecc79c4bd0ae892495c84",
+    "release": "v2026.10.08",
+    "five4_bundle_sha256": "e7de479fb54624473fa26445f400ffd50631d47be8ae622a5e33aab685e8a686",
+    "updater_sha256": "99e32cb6fb630437a192c832a0b38d61f532c72b2ec19301bfed081cebc56f45"
+  },
+  "immortalwrt": {
+    "validated_version": "25.12.2",
+    "target": "armsr/armv8",
+    "rootfs_sha256_validated": "406f7fd685eb33440afa4cbab1bc87a715cad7e4639569e8d31b25333f5c8b36"
+  },
+  "themes": {
+    "aurora": {
+      "tag": "v1.4.0",
+      "file": "luci-theme-aurora-1.4.0-r20260920.apk",
+      "sha256": "05f9015e0a4e2859f6a153f69e472f2984481490d4ce6db19b8a41bba7264f1e"
+    },
+    "argon": {
+      "tag": "v2.4.7",
+      "file": "luci-theme-argon-2.4.7-r1.apk",
+      "sha256": "c5f0e3a55ef96213884184be9aeaadc8586418986c4dde1ff1866be5e938aaef"
+    }
+  },
+  "kernels": {
+    "lts_series": "6.18",
+    "note": "no digest is pinned here: kernel.org's own sha256sums.asc is the source of truth, so a new point release needs no change"
+  }
+}
