@@ -1,0 +1,92 @@
+diff --git a/openwrt/build-rootfs.sh b/openwrt/build-rootfs.sh
+index 7b55bd7..52f99f2 100755
+--- a/openwrt/build-rootfs.sh
++++ b/openwrt/build-rootfs.sh
+@@ -93,8 +93,12 @@ docker run --rm --platform linux/arm64 \
+   $(opt tools/logdw/logdw logdw) $(opt tools/bt-init/mu300-bt-init bt-init) $(opt tools/keys/mu300-keys keys) $(opt tools/gpu/cltest cltest) \
+   $(opt busybox busybox) $(opt sing-box sing-box) $(opt xray xray) $(opt hev-socks5-tunnel hev-socks5-tunnel) $(mainline_opt modules mainline-modules) $(plugin_opt) -v "$TOP/openwrt":/out -v "$REGDB":/in/regdb:ro \
+   -v "$THEME_APK":/in/luci-theme-aurora.apk:ro \
++  ${MU300_CUSTOMIZE_DIR:+-v "$MU300_CUSTOMIZE_DIR":/custom:ro} \
+   -e KREL=$KREL -e OUT="$(basename "$OUT")" -e MU300_VERSION="${MU300_VERSION:-dev}" mu300-$FLAVOUR-base:$VER /bin/sh -eu -c '
+ mkdir -p /var/lock /var/run /tmp
++printf "%s\n" "#!/bin/sh" "exec /bin/uclient-fetch -4 \"\$@\"" > /tmp/mu300-wget
++chmod 755 /tmp/mu300-wget
++ln -sf /tmp/mu300-wget /usr/bin/wget
+ apk update >/dev/null
+ # openssl-util: mu300-vpn fetches the VPN server certificate with it to pin, for links that ask for allowInsecure;
+ # i2c-tools, gpiod-tools: mu300-usb (the charger of the U30 Air) and mu300-nfc (its NFC tag)
+@@ -108,10 +112,12 @@ apk del luci-app-attendedsysupgrade attendedsysupgrade-common owut >/dev/null 2>
+ R=/build/root; mkdir -p $R
+ # copy the live filesystem of this container (the OpenWrt rootfs plus packages), without runtime mounts
+ for e in /*; do
+-    case "$e" in /proc|/sys|/dev|/build|/in|/out|/tmp) continue ;; esac
++    case "$e" in /proc|/sys|/dev|/build|/in|/out|/custom|/tmp) continue ;; esac
+     cp -a "$e" $R/
+ done
+ mkdir -p $R/proc $R/sys $R/dev $R/tmp $R/run $R/opt
++# Do not ship the build-only IPv4 wrapper.
++ln -sf /bin/uclient-fetch $R/usr/bin/wget
+ # Docker bind-mounts these three into the container, so the copy above picks up the build host versions:
+ # a resolv.conf pointing at the internal Docker DNS (which broke every lookup the device itself made), a hosts
+ # file with the container id, and a hostname that was the container id. Put the OpenWrt ones back.
+@@ -195,6 +201,7 @@ if ls /in/mainline-modules/*.ko >/dev/null 2>&1; then
+     krel=$(for f in /in/mainline-modules/*.ko; do tr "\0" "\n" < $f | sed -n "s/^vermagic=\([^ ]*\) .*/\1/p"; break; done)
+     [ -n "$krel" ] && mkdir -p $R/lib/modules/$krel && cp /in/mainline-modules/*.ko $R/lib/modules/$krel/
+ fi
++[ ! -f /custom/customize-rootfs.sh ] || sh -eu /custom/customize-rootfs.sh "$R"
+ cd $R && tar -czf /out/$OUT .
+ ls -la /out/$OUT'
+ rm -rf "$REGDB"
+diff --git a/upstream/build-modules.sh b/upstream/build-modules.sh
+index a00e922..15970e6 100644
+--- a/upstream/build-modules.sh
++++ b/upstream/build-modules.sh
+@@ -3,6 +3,8 @@
+ # Run inside the mu300-mainline-build container: bash /work/build-modules.sh [module-dir...]
+ set -eo pipefail
+ KV=${KV:-6.18.54}
++JOBS=${MU300_BUILD_JOBS:-8}
++[[ "$JOBS" =~ ^[1-8]$ ]] || { echo "MU300_BUILD_JOBS must be 1..8" >&2; exit 1; }
+ [ "$(uname -m)" = aarch64 ] || export CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
+ K=/src/linux-$KV
+ O=/src/out-$KV
+@@ -13,7 +15,7 @@ mkdir -p $OUT/modules
+ # a full build starts clean, so no module of another kernel release ends up next to the new ones
+ [ $# -gt 0 ] || rm -f $OUT/modules/*.ko $OUT/modules/*.log
+ # Module.symvers for the built-in exports (pcie-sprd etc.)
+-make -C $K O=$O ARCH=arm64 -j"$(nproc)" modules > $O/modules.log 2>&1 || { tail -20 $O/modules.log; exit 1; }
++make -C $K O=$O ARCH=arm64 -j"$JOBS" modules > $O/modules.log 2>&1 || { tail -20 $O/modules.log; exit 1; }
+ extra=
+ for m in $mods; do
+     rm -rf /src/mod-build/$m && mkdir -p /src/mod-build && cp -r /work/modules/$m /src/mod-build/$m
+@@ -29,7 +31,7 @@ for m in $mods; do
+     # the modem modules
+     [ "$m" = mali ] && [ ! -d /src/mod-build/mali/kinclude ] && cp -r /work/modules/sprd_modem/kinclude /src/mod-build/mali/kinclude
+     [ "$m" = mali ] && margs="src=/src/mod-build/mali CONFIG_MALI_MIDGARD=m CONFIG_MALI_PLATFORM_NAME=qogirn6pro CONFIG_MALI_DEVFREQ=y CONFIG_DEVFREQ_THERMAL=y CONFIG_MALI_DEBUG=n CONFIG_MALI_FENCE_DEBUG=n BUILD=no"
+-    make -C $O ARCH=arm64 M=/src/mod-build/$m KBUILD_EXTRA_SYMBOLS="$extra" KCFLAGS="$kcflags" $margs -j"$(nproc)" modules 2>&1 | tee $OUT/modules/$m.log
++    make -C $O ARCH=arm64 M=/src/mod-build/$m KBUILD_EXTRA_SYMBOLS="$extra" KCFLAGS="$kcflags" $margs -j"$JOBS" modules 2>&1 | tee $OUT/modules/$m.log
+     [ -f /src/mod-build/$m/Module.symvers ] && extra="$extra /src/mod-build/$m/Module.symvers"
+     find /src/mod-build/$m -name '*.ko' -exec cp {} $OUT/modules/ \;
+ done
+diff --git a/upstream/build.sh b/upstream/build.sh
+index e432d43..cc71a6b 100644
+--- a/upstream/build.sh
++++ b/upstream/build.sh
+@@ -2,6 +2,8 @@
+ # Build mainline for the MU300 inside mu300-mainline-build: Image + DTB. /work = this directory, /src = kernel tree volume
+ set -eo pipefail
+ KV=${KV:-6.18.54}
++JOBS=${MU300_BUILD_JOBS:-8}
++[[ "$JOBS" =~ ^[1-8]$ ]] || { echo "MU300_BUILD_JOBS must be 1..8" >&2; exit 1; }
+ [ "$(uname -m)" = aarch64 ] || export CROSS_COMPILE=${CROSS_COMPILE:-aarch64-linux-gnu-}
+ # where Image, DTB and modules.builtin go: /work/out for 6.18, OUTDIR=out-7.2 keeps another kernel next to it
+ OUT=/work/${OUTDIR:-out}
+@@ -41,7 +43,7 @@ done < /work/mu300-mainline.config
+ [ -z "$bad" ] || { printf "config options not taken:$bad\n" >&2; exit 1; }
+ # on failure show the compiler's own messages: a plain grep for "error" also matches object names like
+ # fdt_strerror.o and used to fill the report with those
+-make O=$O ARCH=arm64 -j"$(nproc)" Image > $O/build.log 2>&1 || {
++make O=$O ARCH=arm64 -j"$JOBS" Image > $O/build.log 2>&1 || {
+     grep -n -E ": (fatal )?error: |-Werror|treated as errors|undefined reference|No such file|Killed|internal compiler error|\*\*\*" -A3 $O/build.log | head -80 || true
+     echo "--- end of build.log:"; tail -25 $O/build.log || true
+     exit 1

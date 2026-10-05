@@ -1,0 +1,227 @@
+name: Firmware build
+
+# Builds the MU300/F50 firmware (ImmortalWrt rootfs + mainline kernel bundles) whenever
+# something it depends on moves: a new ImmortalWrt release, a new kernel.org point release,
+# a new commit on the upstream port, or a change to the scripts here. Runs native on an
+# aarch64 runner, so there is no qemu, no binfmt and no cross compiler involved.
+#
+# Everything is fetched from public sources and checked against a pinned digest before use,
+# and the finished set passes scripts/verify-output.py plus its regression tests before it
+# is published. Nothing device-specific (vendor firmware, Android subset, GPU blobs) is
+# included - the installer adds those on the device.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'          # daily: build only if a dependency moved
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Build even when nothing changed'
+        type: boolean
+        default: false
+      kv_stable:
+        description: 'Primary kernel (empty: newest stable from kernel.org)'
+        type: string
+        default: ''
+      kv_lts:
+        description: 'Fallback kernel (empty: newest 6.18.x longterm)'
+        type: string
+        default: ''
+      wrt_ver:
+        description: 'ImmortalWrt release (empty: newest release)'
+        type: string
+        default: ''
+      upstream_ref:
+        description: 'mu300-linux commit or ref (empty: pinned in inputs/pins.json)'
+        type: string
+        default: ''
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'inputs/**'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: firmware-build
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      release: ${{ steps.decide.outputs.rel }}
+      tag: ${{ steps.decide.outputs.tag }}
+      stable: ${{ steps.decide.outputs.stable }}
+      lts: ${{ steps.decide.outputs.lts }}
+      wrt: ${{ steps.decide.outputs.wrt }}
+      ref: ${{ steps.decide.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the current versions
+        id: resolve
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 https://www.kernel.org/releases.json -o release.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          r = json.load(open('release.json'))['releases']
+          stable = next(x['version'] for x in r if x['moniker'] == 'stable' and not x.get('iseol'))
+          lts = sorted((x['version'] for x in r if x['moniker'] == 'longterm'
+                        and x['version'].startswith('6.18.')),
+                       key=lambda v: [int(p) for p in v.split('.')])[-1]
+          print(f'stable={stable}'); print(f'lts={lts}')
+          PY
+          WRT=$(curl -fsSL --retry 3 https://downloads.immortalwrt.org/releases/ \
+                | sed -n 's/.*href="\(2[0-9]\.[0-9][0-9]\.[0-9][0-9]*\)\/".*/\1/p' | sort -V | tail -1)
+          REF=$(git ls-remote https://github.com/dikeckaan/mu300-linux refs/heads/main | cut -f1)
+          echo "wrt=$WRT" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "resolved: stable=${{ steps.resolve.outputs.stable }} lts=${{ steps.resolve.outputs.lts }} wrt=$WRT ref=$REF"
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          IN_FORCE: ${{ inputs.force }}
+          IN_KV_STABLE: ${{ inputs.kv_stable }}
+          IN_KV_LTS: ${{ inputs.kv_lts }}
+          IN_WRT: ${{ inputs.wrt_ver }}
+          IN_REF: ${{ inputs.upstream_ref }}
+          CUR_STABLE: ${{ steps.resolve.outputs.stable }}
+          CUR_LTS: ${{ steps.resolve.outputs.lts }}
+          CUR_WRT: ${{ steps.resolve.outputs.wrt }}
+          CUR_REF: ${{ steps.resolve.outputs.ref }}
+        run: |
+          set -euo pipefail
+          stable=${IN_KV_STABLE:-$CUR_STABLE}
+          lts=${IN_KV_LTS:-$CUR_LTS}
+          wrt=${IN_WRT:-$CUR_WRT}
+          ref=${IN_REF:-$CUR_REF}
+          for v in "$stable" "$lts" "$wrt"; do
+            case "$v" in ''|*[!0-9.]*) echo "unexpected version '$v'"; exit 1;; esac
+          done
+          # The primary kernel tracks the stable series, the fallback the LTS series.
+          rel="iwrt$wrt-k$stable"
+          tag="$rel-$(date -u +%Y%m%d)"
+          last=$(python3 -c 'import json;print(json.load(open("state/last-build.json"))["key"])' 2>/dev/null || echo none)
+          key="$rel/$lts/$ref"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "rel=$rel" >> "$GITHUB_OUTPUT"
+          echo "stable=$stable" >> "$GITHUB_OUTPUT"
+          echo "lts=$lts" >> "$GITHUB_OUTPUT"
+          echo "wrt=$wrt" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "${IN_FORCE:-false}" = true ]; then
+            echo "building: forced"
+          elif [ "$key" = "$last" ]; then
+            echo "nothing to do: $key is already built"
+            echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
+          else
+            echo "building: $key (last was $last)"
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/boost /usr/share/swift 2>/dev/null || true
+          docker image prune -af >/dev/null 2>&1 || true
+          df -h / | tail -1
+
+      # The kernel tarballs are ~150 MB each and rarely change: keeping them makes a rerun
+      # skip the download. They are still checked against kernel.org's digest on every run.
+      - name: Cache kernel tarballs
+        uses: actions/cache@v4
+        with:
+          path: kernel-src/*.tar.xz
+          key: kernel-tarballs-${{ needs.plan.outputs.stable }}-${{ needs.plan.outputs.lts }}
+
+      - name: Build
+        env:
+          KV_STABLE: ${{ needs.plan.outputs.stable }}
+          KV_LTS: ${{ needs.plan.outputs.lts }}
+          WRT_VER: ${{ needs.plan.outputs.wrt }}
+          MU300_UPSTREAM_REF: ${{ needs.plan.outputs.ref }}
+          MU300_BUILD_JOBS: '4'
+          WORK: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          bash scripts/ci-build.sh
+
+      - name: Record the build
+        run: |
+          set -euo pipefail
+          key="${{ needs.plan.outputs.rel }}/${{ needs.plan.outputs.lts }}/${{ needs.plan.outputs.ref }}"
+          mkdir -p state
+          python3 - "$key" <<'PY'
+          import json, sys, datetime
+          json.dump({"key": sys.argv[1],
+                     "release": __import__('os').environ['REL'],
+                     "built_utc": datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')},
+                    open('state/last-build.json', 'w'), indent=2, sort_keys=True)
+          PY
+        env:
+          REL: ${{ needs.plan.outputs.rel }}
+
+      - name: Commit the build record
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add state/last-build.json
+          git diff --cached --quiet || { git commit -m "build: ${{ needs.plan.outputs.rel }} (${{ needs.plan.outputs.ref }})"; git push; }
+
+      - name: Upload the release set
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.plan.outputs.tag }}
+          path: |
+            dist/${{ needs.plan.outputs.rel }}/assets/**
+            dist/${{ needs.plan.outputs.rel }}/BUILDINFO/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          REL: ${{ needs.plan.outputs.rel }}
+        run: |
+          set -euo pipefail
+          A="dist/$REL/assets"
+          cat > NOTES.md <<EOF
+          Built by GitHub Actions from the sources below. Nothing here is flashed by CI; the
+          device-side install is done separately.
+
+          | input | version |
+          |---|---|
+          | ImmortalWrt | ${{ needs.plan.outputs.wrt }} |
+          | kernel (primary) | ${{ needs.plan.outputs.stable }} (built here) |
+          | kernel (fallback) | ${{ needs.plan.outputs.lts }} (built here) |
+          | mu300-linux | \`${{ needs.plan.outputs.ref }}\` |
+
+          The 5.4 kernel bundle and \`mu300-update\` are reused from the upstream
+          \`dikeckaan/mu300-linux\` release and are byte-identical to it (verified by digest).
+          Every file here passed \`scripts/verify-output.py\` and its four regression tests.
+          See PROVENANCE.md in the repository.
+
+          \`\`\`
+          $(cat "$A"/*/SHA256SUMS 2>/dev/null || cat "$A"/SHA256SUMS)
+          \`\`\`
+          EOF
+          gh release create "$TAG" "$A"/*/mu300-* "$A"/*/SHA256SUMS \
+            --title "$TAG" --notes-file NOTES.md

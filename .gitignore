@@ -1,0 +1,14 @@
+# build workspace: everything below is produced by scripts/ci-build.sh
+/src/
+/kernel-src/
+/inputs/
+/custom/
+/dist/
+/state/
+*.log
+versions.json
+kernel.org-releases.json
+immortalwrt-*-sha256sums
+kernel-*.release
+__pycache__/
+*.pyc
