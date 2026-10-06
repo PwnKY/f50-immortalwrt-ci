@@ -112,12 +112,17 @@ KV_STABLE_SERIES=${KV_STABLE%.*}
 KV_LTS_SERIES=${KV_LTS%.*}
 [ "$KV_STABLE_SERIES" != "$KV_LTS_SERIES" ] || die "stable and LTS resolved to the same series"
 
+UPSTREAM_REF=${UPSTREAM_REF:-$(pin upstream.commit)}
 if [ ! -d "$SRC/.git" ]; then
     say "cloning $UPSTREAM_REPO"
     retry 3 git clone --quiet "$UPSTREAM_REPO" "$SRC" || die "could not clone $UPSTREAM_REPO"
 fi
-retry 3 git -C "$SRC" fetch --quiet origin || die "could not fetch from $UPSTREAM_REPO"
-UPSTREAM_REF=${UPSTREAM_REF:-$(pin upstream.commit)}
+# The pin is the tip of a branch that no longer exists upstream, so it is reachable from no
+# ref and a plain fetch would not bring its objects. Ask for it by hash. GitHub serves an
+# object that still exists even when nothing references it - if that ever stops working, the
+# message below is the signal to mirror the pinned tree into this repository.
+retry 3 git -C "$SRC" fetch --quiet origin "$UPSTREAM_REF"     || die "could not fetch $UPSTREAM_REF from $UPSTREAM_REPO (a deleted branch's tip is not
+       reachable from any ref; verify the commit still exists, or mirror it into this repo)"
 retry 3 git -C "$SRC" checkout --quiet --detach "$UPSTREAM_REF" || die "could not check out $UPSTREAM_REF"
 # The build adaptations this harness needs: the parallelism cap, the customization mount and
 # hook in the rootfs assembler, and the build-time IPv4 download wrapper. Kept as a patch so
