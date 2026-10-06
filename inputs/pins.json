@@ -1,7 +1,11 @@
 {
   "upstream": {
-    "repo": "https://github.com/dikeckaan/mu300-linux",
-    "commit": "35a1c5503303bf47870ecc79c4bd0ae892495c84",
+    "repo": "https://github.com/PwnKY/mu300-linux-pin",
+    "commit": "d1eeaf72454dd998b17e19e8e545d46715257d6e",
+    "note": "repo/commit above are the mirror this build checks out. It is a verbatim copy of the upstream tree at mirror_of_commit, minus stock/ (see the mirror's NOTICE.md). Using the mirror keeps the build working if upstream collects the commit objects of the branch it since deleted.",
+    "mirror_of": "https://github.com/dikeckaan/mu300-linux",
+    "mirror_of_commit": "35a1c5503303bf47870ecc79c4bd0ae892495c84",
+    "release_repo": "https://github.com/dikeckaan/mu300-linux",
     "release": "v2026.10.08",
     "five4_bundle_sha256": "e7de479fb54624473fa26445f400ffd50631d47be8ae622a5e33aab685e8a686",
     "updater_sha256": "99e32cb6fb630437a192c832a0b38d61f532c72b2ec19301bfed081cebc56f45"

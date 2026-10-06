@@ -7,7 +7,8 @@ checked before use; a mismatch stops the build.
 
 | input | source | verification |
 |---|---|---|
-| port source (patches, drivers, overlays, tooling) | `github.com/dikeckaan/mu300-linux` @ the commit in `inputs/pins.json` | the commit is checked out by hash |
+| port source (patches, drivers, overlays, tooling) | our mirror `github.com/PwnKY/mu300-linux-pin` @ the commit in `inputs/pins.json` — a verbatim copy of `dikeckaan/mu300-linux` at `35a1c550…`, minus `stock/` | the commit is checked out by hash; the mirror exists because upstream deleted the branch that commit was the tip of |
+| reused 5.4 bundle and updater | the upstream release named in `inputs/pins.json` (`release_repo`) | pinned digest in `inputs/pins.json` |
 | Linux stable (primary kernel) | `cdn.kernel.org` (mirror fallback) | the release's own `sha256sums.asc` |
 | Linux longterm (fallback kernel) | `cdn.kernel.org` (mirror fallback) | the release's own `sha256sums.asc` |
 | ImmortalWrt base rootfs (`armsr/armv8`) | `downloads.immortalwrt.org/releases/<ver>/` | the release's own `sha256sums` |

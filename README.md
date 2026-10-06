@@ -75,9 +75,13 @@ Useful environment variables: `KV_STABLE`, `KV_LTS`, `WRT_VER`, `MU300_UPSTREAM_
 ## Credits and licensing
 
 The port itself — kernel patches, out-of-tree drivers, overlays, installer — is
-[dikeckaan/mu300-linux](https://github.com/dikeckaan/mu300-linux), MIT licensed. The
-ImmortalWrt base is an OpenWrt fork and keeps its own licences. See `PROVENANCE.md` for
-the exact sources, digests and what is rebuilt versus reused.
+[dikeckaan/mu300-linux](https://github.com/dikeckaan/mu300-linux), MIT licensed (its kernel
+and driver sources are GPL-2.0). This build checks it out from a verbatim mirror,
+[PwnKY/mu300-linux-pin](https://github.com/PwnKY/mu300-linux-pin), because upstream deleted
+the branch the pinned commit was the tip of; the mirror's `NOTICE.md` records the provenance,
+the licence split, and the one thing it leaves out (`stock/`, whose rights the upstream
+README reserves for ZTE/Unisoc). The ImmortalWrt base is an OpenWrt fork and keeps its own
+licences. See `PROVENANCE.md` for the exact sources, digests and what is rebuilt versus reused.
 
 This repository is an independent build harness around that work; it is not affiliated
 with ImmortalWrt, OpenWrt or the upstream author.

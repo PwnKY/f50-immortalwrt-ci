@@ -34,7 +34,8 @@ else
 fi
 IMG=${MU300_BUILD_IMAGE:-mu300-mainline-build}
 
-UPSTREAM_REPO=${MU300_UPSTREAM_REPO:-https://github.com/dikeckaan/mu300-linux}
+# resolved from inputs/pins.json below (the mirror), so swapping it needs no script change
+UPSTREAM_REPO=${MU300_UPSTREAM_REPO:-}
 UPSTREAM_REF=${MU300_UPSTREAM_REF:-}
 # kernel.org is the source of truth for the digests even when a mirror is faster
 KERNEL_BASE=https://cdn.kernel.org/pub/linux/kernel
@@ -112,17 +113,18 @@ KV_STABLE_SERIES=${KV_STABLE%.*}
 KV_LTS_SERIES=${KV_LTS%.*}
 [ "$KV_STABLE_SERIES" != "$KV_LTS_SERIES" ] || die "stable and LTS resolved to the same series"
 
+UPSTREAM_REPO=${UPSTREAM_REPO:-$(pin upstream.repo)}
+RELEASE_REPO=$(pin upstream.release_repo)
 UPSTREAM_REF=${UPSTREAM_REF:-$(pin upstream.commit)}
 if [ ! -d "$SRC/.git" ]; then
     say "cloning $UPSTREAM_REPO"
     retry 3 git clone --quiet "$UPSTREAM_REPO" "$SRC" || die "could not clone $UPSTREAM_REPO"
 fi
-# The pin is the tip of a branch that no longer exists upstream, so it is reachable from no
-# ref and a plain fetch would not bring its objects. Ask for it by hash. GitHub serves an
-# object that still exists even when nothing references it - if that ever stops working, the
-# message below is the signal to mirror the pinned tree into this repository.
-retry 3 git -C "$SRC" fetch --quiet origin "$UPSTREAM_REF"     || die "could not fetch $UPSTREAM_REF from $UPSTREAM_REPO (a deleted branch's tip is not
-       reachable from any ref; verify the commit still exists, or mirror it into this repo)"
+# Fetch the pinned commit by hash rather than relying on the default refspec: the tree we
+# build is kept in our own mirror (see inputs/pins.json and the mirror's NOTICE.md) precisely
+# because upstream deleted the branch this commit used to be the tip of.
+retry 3 git -C "$SRC" fetch --quiet origin "$UPSTREAM_REF"     || die "could not fetch $UPSTREAM_REF from $UPSTREAM_REPO
+       (the pin must exist there; see inputs/pins.json and the mirror's NOTICE.md)"
 retry 3 git -C "$SRC" checkout --quiet --detach "$UPSTREAM_REF" || die "could not check out $UPSTREAM_REF"
 # The build adaptations this harness needs: the parallelism cap, the customization mount and
 # hook in the rootfs assembler, and the build-time IPv4 download wrapper. Kept as a patch so
@@ -230,9 +232,9 @@ fetch_checked "https://github.com/jerrykuku/luci-theme-argon/releases/download/$
     "$IN/themes/$(pin themes.argon.file)" "$(pin themes.argon.sha256)"
 # the 5.4 bundle and the updater are reused from the upstream release, not rebuilt:
 # they carry the vendor 5.4 kernel the installer needs and the static busybox/logdw
-fetch_checked "https://github.com/dikeckaan/mu300-linux/releases/download/$UP_TAG/mu300-kernel.tar.gz" \
+fetch_checked "$RELEASE_REPO/releases/download/$UP_TAG/mu300-kernel.tar.gz" \
     "$IN/baseline/mu300-kernel.tar.gz" "$(pin upstream.five4_bundle_sha256)"
-fetch_checked "https://github.com/dikeckaan/mu300-linux/releases/download/$UP_TAG/mu300-update" \
+fetch_checked "$RELEASE_REPO/releases/download/$UP_TAG/mu300-update" \
     "$IN/baseline/mu300-update" "$(pin upstream.updater_sha256)"
 
 # ---------------------------------------------------------------- static helpers
