@@ -8,6 +8,9 @@ and can be started by hand at any time.
 
 This repository contains **only the build**: no phone home, no device access, no flashing.
 
+Every file in this repository, and everything a build produces, is described in
+[FILES.md](FILES.md).
+
 ## What it produces
 
 `dist/immortalwrt-<wrt>-k<stable>/assets/v<wrt>/` — the six files the portable installer

@@ -45,6 +45,7 @@ on:
       - '.gitattributes'
       - 'README.md'
       - 'PROVENANCE.md'
+      - 'FILES.md'
 
 permissions:
   contents: write
