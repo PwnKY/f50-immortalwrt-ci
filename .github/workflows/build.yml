@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     outputs:
       build: ${{ steps.decide.outputs.build }}
-      release: ${{ steps.decide.outputs.rel }}
+      rel: ${{ steps.decide.outputs.rel }}
       tag: ${{ steps.decide.outputs.tag }}
       stable: ${{ steps.decide.outputs.stable }}
       lts: ${{ steps.decide.outputs.lts }}
@@ -70,29 +70,44 @@ jobs:
       - name: Resolve the current versions
         id: resolve
         env:
-          # The branch this harness builds on: the portable/TF branch. main has diverged
-          # (different installer and tooling) and scripts/local-adaptations.patch targets
-          # this one, so tracking main would fail the patch check by design.
-          UPSTREAM_BRANCH: clean-tf-7.2
+          # The port is pinned to a commit, not a branch: the branch this harness was built on
+          # (clean-tf-7.2) was deleted upstream, and its tip is the only tree carrying the LED
+          # work this firmware needs. A manual run can point elsewhere with the upstream_ref input.
+          IN_REF: ${{ inputs.upstream_ref }}
         run: |
           set -euo pipefail
-          curl -fsSL --retry 3 https://www.kernel.org/releases.json -o release.json
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          fail() { echo "cannot resolve $1"; exit 1; }
+
+          curl -fsSL --retry 3 https://www.kernel.org/releases.json -o release.json \
+            || fail "https://www.kernel.org/releases.json"
+          KV=$(python3 - <<'PYEOF'
           import json
           r = json.load(open('release.json'))['releases']
           stable = next(x['version'] for x in r if x['moniker'] == 'stable' and not x.get('iseol'))
           lts = sorted((x['version'] for x in r if x['moniker'] == 'longterm'
                         and x['version'].startswith('6.18.')),
                        key=lambda v: [int(p) for p in v.split('.')])[-1]
-          print(f'stable={stable}'); print(f'lts={lts}')
-          PY
+          print(stable, lts)
+          PYEOF
+          ) || fail "the kernel versions in kernel.org releases.json"
+          set -- $KV
+          STABLE=${1:-}; LTS=${2:-}
+          [ -n "$STABLE" ] && [ -n "$LTS" ] || fail "the kernel versions in kernel.org releases.json"
+
           WRT=$(curl -fsSL --retry 3 https://downloads.immortalwrt.org/releases/ \
-                | sed -n 's/.*href="\(2[0-9]\.[0-9][0-9]\.[0-9][0-9]*\)\/".*/\1/p' | sort -V | tail -1)
-          REF=$(git ls-remote https://github.com/dikeckaan/mu300-linux "refs/heads/$UPSTREAM_BRANCH" | cut -f1)
-          [ -n "$WRT" ] && [ -n "$REF" ]
-          echo "wrt=$WRT" >> "$GITHUB_OUTPUT"
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "resolved: branch=$UPSTREAM_BRANCH wrt=$WRT ref=$REF"
+                | sed -n 's/.*href="\(2[0-9]\.[0-9][0-9]\.[0-9][0-9]*\)\/".*/\1/p' | sort -V | tail -1) || true
+          [ -n "$WRT" ] || fail "the ImmortalWrt release list"
+
+          REF=${IN_REF:-$(python3 -c "import json;print(json.load(open('inputs/pins.json'))['upstream']['commit'])")}
+          [ -n "$REF" ] || fail "the pinned upstream commit in inputs/pins.json"
+
+          {
+            echo "stable=$STABLE"
+            echo "lts=$LTS"
+            echo "wrt=$WRT"
+            echo "ref=$REF"
+          } >> "$GITHUB_OUTPUT"
+          echo "resolved: stable=$STABLE lts=$LTS wrt=$WRT ref=$REF"
 
       - name: Decide whether to build
         id: decide
@@ -232,5 +247,15 @@ jobs:
           $(cat "$A"/*/SHA256SUMS 2>/dev/null || cat "$A"/SHA256SUMS)
           \`\`\`
           EOF
-          gh release create "$TAG" "$A"/*/mu300-* "$A"/*/SHA256SUMS \
-            --title "$TAG" --notes-file NOTES.md
+          # A second run on the same day resolves the same versions and therefore the same tag:
+          # update that release instead of failing on a tag that already exists.
+          mapfile -t FILES < <(ls "$A"/*/mu300-* "$A"/*/SHA256SUMS)
+          [ "${#FILES[@]}" -eq 6 ] || { echo "expected 6 files, found ${#FILES[@]}"; exit 1; }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+            gh release edit "$TAG" --notes-file NOTES.md
+            echo "updated the existing release $TAG"
+          else
+            gh release create "$TAG" "${FILES[@]}" --title "$TAG" --notes-file NOTES.md
+            echo "published $TAG"
+          fi
