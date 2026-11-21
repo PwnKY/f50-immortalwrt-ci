@@ -90,3 +90,24 @@ index e432d43..cc71a6b 100644
      grep -n -E ": (fatal )?error: |-Werror|treated as errors|undefined reference|No such file|Killed|internal compiler error|\*\*\*" -A3 $O/build.log | head -80 || true
      echo "--- end of build.log:"; tail -25 $O/build.log || true
      exit 1
+diff --git a/upstream/config-ignored.txt b/upstream/config-ignored.txt
+new file mode 100644
+index 0000000..7e74aa2
+--- /dev/null
++++ b/upstream/config-ignored.txt
+@@ -0,0 +1 @@
++CONFIG_PROC_SYSCTL
+diff --git a/upstream/mu300-mainline.config b/upstream/mu300-mainline.config
+index 04e6831..ce830db 100644
+--- a/upstream/mu300-mainline.config
++++ b/upstream/mu300-mainline.config
+@@ -22,6 +22,9 @@ CONFIG_DEVTMPFS=y
+ CONFIG_DEVTMPFS_MOUNT=y
+ CONFIG_PROC_FS=y
+ CONFIG_PROC_SYSCTL=y
++# 7.3 removed PROC_SYSCTL (upstream 8d75c338f0bc: it only mirrored SYSCTL); SYSCTL is what gives /proc/sys
++# in every kernel, so it is checked instead and PROC_SYSCTL is listed in config-ignored.txt
++CONFIG_SYSCTL=y
+ CONFIG_SYSFS=y
+ CONFIG_TMPFS=y
+ CONFIG_BINFMT_ELF=y
