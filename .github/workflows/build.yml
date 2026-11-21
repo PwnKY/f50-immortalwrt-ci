@@ -20,7 +20,7 @@ on:
         type: boolean
         default: false
       kv_stable:
-        description: 'Primary kernel (empty: newest stable from kernel.org)'
+        description: 'Primary kernel (empty: newest point release of kernels.stable_series in inputs/pins.json)'
         type: string
         default: ''
       kv_lts:
@@ -81,19 +81,27 @@ jobs:
 
           curl -fsSL --retry 3 https://www.kernel.org/releases.json -o release.json \
             || fail "https://www.kernel.org/releases.json"
-          KV=$(python3 - <<'PYEOF'
+          # The primary kernel is the newest point release of the series pinned in inputs/pins.json
+          # (kernels.stable_series): the device updater and the flasher know the bundles by series,
+          # so following kernel.org's newest stable series would publish a bundle no device takes.
+          # kernel.org's per-major sha256sums.asc lists every release, also after a series' end of
+          # life, and is what the build checks the tarball against anyway.
+          SERIES=$(python3 -c "import json;print(json.load(open('inputs/pins.json'))['kernels']['stable_series'])")
+          case "$SERIES" in [0-9]*.[0-9]*) ;; *) fail "kernels.stable_series in inputs/pins.json";; esac
+          curl -fsSL --retry 3 "https://cdn.kernel.org/pub/linux/kernel/v${SERIES%%.*}.x/sha256sums.asc" -o sums.asc \
+            || fail "https://cdn.kernel.org/pub/linux/kernel/v${SERIES%%.*}.x/sha256sums.asc"
+          STABLE=$(grep -oE 'linux-[0-9]+\.[0-9]+\.[0-9]+\.tar\.xz' sums.asc | sed 's/^linux-//; s/\.tar\.xz$//' \
+                   | awk -F. -v s="$SERIES" '$1 "." $2 == s' | sort -t. -k3,3n | tail -1)
+          LTS=$(python3 - <<'PYEOF'
           import json
           r = json.load(open('release.json'))['releases']
-          stable = next(x['version'] for x in r if x['moniker'] == 'stable' and not x.get('iseol'))
-          lts = sorted((x['version'] for x in r if x['moniker'] == 'longterm'
+          print(sorted((x['version'] for x in r if x['moniker'] == 'longterm'
                         and x['version'].startswith('6.18.')),
-                       key=lambda v: [int(p) for p in v.split('.')])[-1]
-          print(stable, lts)
+                       key=lambda v: [int(p) for p in v.split('.')])[-1])
           PYEOF
-          ) || fail "the kernel versions in kernel.org releases.json"
-          set -- $KV
-          STABLE=${1:-}; LTS=${2:-}
-          [ -n "$STABLE" ] && [ -n "$LTS" ] || fail "the kernel versions in kernel.org releases.json"
+          ) || fail "the 6.18 longterm version in kernel.org releases.json"
+          [ -n "$STABLE" ] || fail "the newest $SERIES release in kernel.org sha256sums.asc"
+          [ -n "$LTS" ] || fail "the 6.18 longterm version in kernel.org releases.json"
 
           WRT=$(curl -fsSL --retry 3 https://downloads.immortalwrt.org/releases/ \
                 | sed -n 's/.*href="\(2[0-9]\.[0-9][0-9]\.[0-9][0-9]*\)\/".*/\1/p' | sort -V | tail -1) || true
@@ -131,7 +139,7 @@ jobs:
           for v in "$stable" "$lts" "$wrt"; do
             case "$v" in ''|*[!0-9.]*) echo "unexpected version '$v'"; exit 1;; esac
           done
-          # The primary kernel tracks the stable series, the fallback the LTS series.
+          # The primary kernel tracks the pinned stable series, the fallback the LTS series.
           rel="immortalwrt-$wrt-k$stable"
           tag="$rel-$(date -u +%Y%m%d)"
           last=$(python3 -c 'import json;print(json.load(open("state/last-build.json"))["key"])' 2>/dev/null || echo none)

@@ -20,7 +20,7 @@ expects, with `SHA256SUMS`:
 |---|---|
 | `mu300-kernel.tar.gz` | reused byte-for-byte from the upstream release (the vendor 5.4 kernel) |
 | `mu300-kernel-<lts>.tar.gz` | **built here** from the kernel.org longterm source |
-| `mu300-kernel-<stable>.tar.gz` | **built here** from the kernel.org stable source |
+| `mu300-kernel-<stable>.tar.gz` | **built here** from the newest kernel.org point release of the series pinned in `inputs/pins.json` (`kernels.stable_series`, currently 7.2: the device updater and the flasher know the bundles by series) |
 | `mu300-openwrt-rootfs.tar.gz` | **built here**: ImmortalWrt base + the port's overlays + customization |
 | `mu300-update` | reused byte-for-byte from the upstream release |
 | `SHA256SUMS` | generated here |

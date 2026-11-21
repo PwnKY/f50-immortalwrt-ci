@@ -28,7 +28,9 @@
     }
   },
   "kernels": {
+    "stable_series": "7.2",
     "lts_series": "6.18",
+    "stable_note": "The primary kernel is the newest point release of stable_series, not kernel.org's newest stable series: the device updater (mu300-update, pinned upstream) and the flasher know the mainline bundles by series (KERNELS=\"5.4 6.18 7.2\", mu300-kernel-7.2.tar.gz), so a bundle of another series would not reach any device. 7.3 builds (its adaptations are in scripts/local-adaptations.patch), but moving the series needs mu300-update and the flasher to learn it first. A manual run can still pick any version with the kv_stable input.",
     "note": "no digest is pinned here: kernel.org's own sha256sums.asc is the source of truth, so a new point release needs no change"
   }
 }

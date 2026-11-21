@@ -84,12 +84,12 @@ say "resolving versions"
 KJ=$WORK/kernel.org-releases.json
 curl -fsSL --retry 3 https://www.kernel.org/releases.json -o "$KJ"
 if [ -z "${KV_STABLE:-}" ]; then
-    KV_STABLE=$(python3 - "$KJ" <<'PY'
-import json,sys
-r=json.load(open(sys.argv[1]))["releases"]
-print(next(x["version"] for x in r if x["moniker"]=="stable" and not x.get("iseol")))
-PY
-)
+    # the newest point release of the series pinned in inputs/pins.json (see kernels.stable_note there)
+    SERIES=$(pin kernels.stable_series)
+    case "$SERIES" in [0-9]*.[0-9]*) ;; *) die "kernels.stable_series in inputs/pins.json";; esac
+    KV_STABLE=$(curl -fsSL --retry 3 "$KERNEL_BASE/v${SERIES%%.*}.x/sha256sums.asc" |
+        grep -oE 'linux-[0-9]+\.[0-9]+\.[0-9]+\.tar\.xz' | sed 's/^linux-//; s/\.tar\.xz$//' |
+        awk -F. -v s="$SERIES" '$1 "." $2 == s' | sort -t. -k3,3n | tail -1)
 fi
 if [ -z "${KV_LTS:-}" ]; then
     KV_LTS=$(python3 - "$KJ" <<'PY'
@@ -271,7 +271,7 @@ run_kernel() { # run_kernel KV OUTDIR SCRIPT
     docker run --rm "${PLATFORM[@]}" --cpus "$JOBS" -v "$KSRC":/src -v "$SRC/upstream":/work "${args[@]}" "$IMG" bash "/work/$script"
 }
 
-say "kernel $KV_STABLE (primary, mainline stable series)"
+say "kernel $KV_STABLE (primary, pinned stable series)"
 run_kernel "$KV_STABLE" "out-$KV_STABLE" build.sh | tee "$WORK/log-kernel-$KV_STABLE-build.log"
 run_kernel "$KV_STABLE" "out-$KV_STABLE" build-modules.sh | tee "$WORK/log-kernel-$KV_STABLE-modules.log"
 say "kernel $KV_LTS (fallback, longterm series)"
