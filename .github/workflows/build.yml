@@ -23,6 +23,10 @@ on:
         description: 'Primary kernel (empty: newest point release of kernels.stable_series in inputs/pins.json)'
         type: string
         default: ''
+      kv_extra:
+        description: 'Opt-in kernels, space separated (empty: newest point release of each kernels.extra_series)'
+        type: string
+        default: ''
       kv_lts:
         description: 'Fallback kernel (empty: newest 6.18.x longterm)'
         type: string
@@ -62,6 +66,7 @@ jobs:
       rel: ${{ steps.decide.outputs.rel }}
       tag: ${{ steps.decide.outputs.tag }}
       stable: ${{ steps.decide.outputs.stable }}
+      extra: ${{ steps.decide.outputs.extra }}
       lts: ${{ steps.decide.outputs.lts }}
       wrt: ${{ steps.decide.outputs.wrt }}
       ref: ${{ steps.decide.outputs.ref }}
@@ -86,12 +91,22 @@ jobs:
           # so following kernel.org's newest stable series would publish a bundle no device takes.
           # kernel.org's per-major sha256sums.asc lists every release, also after a series' end of
           # life, and is what the build checks the tarball against anyway.
+          # The opt-in kernels (kernels.extra_series, e.g. 7.3) are resolved the same way.
+          newest() {  # newest SERIES -> its newest point release
+            case "$1" in [0-9]*.[0-9]*) ;; *) fail "kernel series '$1' in inputs/pins.json";; esac
+            [ -s "sums-${1%%.*}.asc" ] || curl -fsSL --retry 3 "https://cdn.kernel.org/pub/linux/kernel/v${1%%.*}.x/sha256sums.asc" \
+              -o "sums-${1%%.*}.asc" || fail "https://cdn.kernel.org/pub/linux/kernel/v${1%%.*}.x/sha256sums.asc"
+            grep -oE 'linux-[0-9]+\.[0-9]+\.[0-9]+\.tar\.xz' "sums-${1%%.*}.asc" | sed 's/^linux-//; s/\.tar\.xz$//' \
+              | awk -F. -v s="$1" '$1 "." $2 == s' | sort -t. -k3,3n | tail -1
+          }
           SERIES=$(python3 -c "import json;print(json.load(open('inputs/pins.json'))['kernels']['stable_series'])")
-          case "$SERIES" in [0-9]*.[0-9]*) ;; *) fail "kernels.stable_series in inputs/pins.json";; esac
-          curl -fsSL --retry 3 "https://cdn.kernel.org/pub/linux/kernel/v${SERIES%%.*}.x/sha256sums.asc" -o sums.asc \
-            || fail "https://cdn.kernel.org/pub/linux/kernel/v${SERIES%%.*}.x/sha256sums.asc"
-          STABLE=$(grep -oE 'linux-[0-9]+\.[0-9]+\.[0-9]+\.tar\.xz' sums.asc | sed 's/^linux-//; s/\.tar\.xz$//' \
-                   | awk -F. -v s="$SERIES" '$1 "." $2 == s' | sort -t. -k3,3n | tail -1)
+          STABLE=$(newest "$SERIES")
+          EXTRA=
+          for s in $(python3 -c "import json;print(' '.join(json.load(open('inputs/pins.json'))['kernels'].get('extra_series', [])))"); do
+            v=$(newest "$s")
+            [ -n "$v" ] || fail "the newest $s release in kernel.org sha256sums.asc"
+            EXTRA="${EXTRA:+$EXTRA }$v"
+          done
           LTS=$(python3 - <<'PYEOF'
           import json
           r = json.load(open('release.json'))['releases']
@@ -112,41 +127,49 @@ jobs:
 
           {
             echo "stable=$STABLE"
+            echo "extra=$EXTRA"
             echo "lts=$LTS"
             echo "wrt=$WRT"
             echo "ref=$REF"
           } >> "$GITHUB_OUTPUT"
-          echo "resolved: stable=$STABLE lts=$LTS wrt=$WRT ref=$REF"
+          echo "resolved: stable=$STABLE extra=$EXTRA lts=$LTS wrt=$WRT ref=$REF"
 
       - name: Decide whether to build
         id: decide
         env:
           IN_FORCE: ${{ inputs.force }}
           IN_KV_STABLE: ${{ inputs.kv_stable }}
+          IN_KV_EXTRA: ${{ inputs.kv_extra }}
           IN_KV_LTS: ${{ inputs.kv_lts }}
           IN_WRT: ${{ inputs.wrt_ver }}
           IN_REF: ${{ inputs.upstream_ref }}
           CUR_STABLE: ${{ steps.resolve.outputs.stable }}
+          CUR_EXTRA: ${{ steps.resolve.outputs.extra }}
           CUR_LTS: ${{ steps.resolve.outputs.lts }}
           CUR_WRT: ${{ steps.resolve.outputs.wrt }}
           CUR_REF: ${{ steps.resolve.outputs.ref }}
         run: |
           set -euo pipefail
           stable=${IN_KV_STABLE:-$CUR_STABLE}
+          extra=${IN_KV_EXTRA:-$CUR_EXTRA}
           lts=${IN_KV_LTS:-$CUR_LTS}
           wrt=${IN_WRT:-$CUR_WRT}
           ref=${IN_REF:-$CUR_REF}
-          for v in "$stable" "$lts" "$wrt"; do
+          for v in "$stable" "$lts" "$wrt" $extra; do
             case "$v" in ''|*[!0-9.]*) echo "unexpected version '$v'"; exit 1;; esac
           done
-          # The primary kernel tracks the pinned stable series, the fallback the LTS series.
+          extra=$(echo $extra)   # one space between versions, none around them
+          # The primary kernel tracks the pinned stable series, the fallback the LTS series; the
+          # opt-in kernels are part of the name, so a new point release of one triggers a build.
           rel="immortalwrt-$wrt-k$stable"
+          for v in $extra; do rel="$rel-k$v"; done
           tag="$rel-$(date -u +%Y%m%d)"
           last=$(python3 -c 'import json;print(json.load(open("state/last-build.json"))["key"])' 2>/dev/null || echo none)
           key="$rel/$lts/$ref"
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "rel=$rel" >> "$GITHUB_OUTPUT"
           echo "stable=$stable" >> "$GITHUB_OUTPUT"
+          echo "extra=$extra" >> "$GITHUB_OUTPUT"
           echo "lts=$lts" >> "$GITHUB_OUTPUT"
           echo "wrt=$wrt" >> "$GITHUB_OUTPUT"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
@@ -181,11 +204,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kernel-src/*.tar.xz
-          key: kernel-tarballs-${{ needs.plan.outputs.stable }}-${{ needs.plan.outputs.lts }}
+          key: kernel-tarballs-${{ needs.plan.outputs.stable }}-${{ needs.plan.outputs.extra }}-${{ needs.plan.outputs.lts }}
 
       - name: Build
         env:
           KV_STABLE: ${{ needs.plan.outputs.stable }}
+          KV_EXTRA: ${{ needs.plan.outputs.extra }}
           KV_LTS: ${{ needs.plan.outputs.lts }}
           WRT_VER: ${{ needs.plan.outputs.wrt }}
           MU300_UPSTREAM_REF: ${{ needs.plan.outputs.ref }}
@@ -233,9 +257,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.plan.outputs.tag }}
           REL: ${{ needs.plan.outputs.rel }}
+          EXTRA: ${{ needs.plan.outputs.extra }}
         run: |
           set -euo pipefail
           A="dist/$REL/assets"
+          extra_rows=
+          for v in $EXTRA; do
+            extra_rows="$extra_rows| kernel (opt-in, \`mu300-update kernel ${v%.*}\`) | $v (built here) |"$'\n'
+          done
           cat > NOTES.md <<EOF
           Built by GitHub Actions from the sources below. Nothing here is flashed by CI; the
           device-side install is done separately.
@@ -244,12 +273,15 @@ jobs:
           |---|---|
           | ImmortalWrt | ${{ needs.plan.outputs.wrt }} |
           | kernel (primary) | ${{ needs.plan.outputs.stable }} (built here) |
-          | kernel (fallback) | ${{ needs.plan.outputs.lts }} (built here) |
+          ${extra_rows}| kernel (fallback) | ${{ needs.plan.outputs.lts }} (built here) |
           | mu300-linux | \`${{ needs.plan.outputs.ref }}\` |
 
-          The 5.4 kernel bundle and \`mu300-update\` are reused from the upstream
-          \`dikeckaan/mu300-linux\` release and are byte-identical to it (verified by digest).
-          Every file here passed \`scripts/verify-output.py\` and its four regression tests.
+          The 5.4 kernel bundle is reused from the upstream \`dikeckaan/mu300-linux\` release and
+          is byte-identical to it (verified by digest). \`mu300-update\` is the pinned tree's own
+          updater with this repository's adaptations (scripts/local-adaptations.patch), the same
+          file the rootfs carries. Devices stay on their kernel; an opt-in kernel is installed
+          only by \`mu300-update kernel <series>\`.
+          Every file here passed \`scripts/verify-output.py\` and its regression tests.
           See PROVENANCE.md in the repository.
 
           \`\`\`
@@ -259,7 +291,8 @@ jobs:
           # A second run on the same day resolves the same versions and therefore the same tag:
           # update that release instead of failing on a tag that already exists.
           mapfile -t FILES < <(ls "$A"/*/mu300-* "$A"/*/SHA256SUMS)
-          [ "${#FILES[@]}" -eq 6 ] || { echo "expected 6 files, found ${#FILES[@]}"; exit 1; }
+          want=$(( 6 + $(echo $EXTRA | wc -w) ))
+          [ "${#FILES[@]}" -eq "$want" ] || { echo "expected $want files, found ${#FILES[@]}"; exit 1; }
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${FILES[@]}" --clobber
             gh release edit "$TAG" --notes-file NOTES.md

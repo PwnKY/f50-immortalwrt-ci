@@ -15,7 +15,7 @@ checked before use; a mismatch stops the build.
 | Aurora theme APK | `github.com/eamonxg/luci-theme-aurora` release | pinned digest in `inputs/pins.json` |
 | Argon theme APK | `github.com/jerrykuku/luci-theme-argon` release | pinned digest in `inputs/pins.json` |
 | 5.4 kernel bundle (`mu300-kernel.tar.gz`) | `github.com/dikeckaan/mu300-linux` release | pinned digest in `inputs/pins.json` |
-| installer updater (`mu300-update`) | `github.com/dikeckaan/mu300-linux` release | pinned digest in `inputs/pins.json` |
+| installer updater (`mu300-update`) | the pinned tree (`rootfs/overlay/opt/mu300/bin/mu300-update`) + `scripts/local-adaptations.patch` | pinned commit in `inputs/pins.json`; checked by `scripts/verify-output.py` |
 
 The ImmortalWrt and kernel versions follow the newest release automatically, so their
 digests are not pinned: they are taken from the publisher's own checksum list, which is the
@@ -42,11 +42,17 @@ they are attached to fixed releases that do not move.
 - `mu300-kernel.tar.gz` — the vendor 5.4 kernel bundle, taken byte-for-byte from the
   upstream release. It also supplies the static `busybox` and `logdw` used by the generic
   ramdisk, and the 5.4 module set that goes into the root filesystem.
-- `mu300-update` — the standalone updater, byte-for-byte from the same release.
 
-They are re-published in this repository's releases for convenience so the asset set is
-complete and can be flashed directly; they are the upstream author's binaries and are not
-modified here. The Wi-Fi/BT, SIPA and other vendor modules in the root filesystem for these
+It is re-published in this repository's releases for convenience so the asset set is
+complete and can be flashed directly; it is the upstream author's file and is not modified
+here.
+
+`mu300-update` is **not** taken from that release: the release's copy is older than the
+pinned tree's own updater (it writes `boot_b` only, without the Linux slot detection), and a
+device replaces its updater with the release's one before it updates. The build publishes
+the tree's `rootfs/overlay/opt/mu300/bin/mu300-update` with the local adaptations (the 7.3
+kernel choice) — the same file the root filesystem carries, and what upstream's own
+`tools/make-release.sh` publishes. The Wi-Fi/BT, SIPA and other vendor modules in the root filesystem for these
 kernels come from the same bundles, so each kernel bundle and its module set stay in step.
 
 ## Not included
@@ -58,12 +64,13 @@ installer sets one.
 
 ## Verification
 
-`scripts/verify-output.py` checks the finished set: exactly six filenames, five distinct
-digests consistent with `SHA256SUMS`, the reused files unchanged, each of the three module
-sets byte-identical to the matching bundle (with vermagic agreement), the Chinese
+`scripts/verify-output.py` checks the finished set: the expected filenames (one bundle per
+kernel series), digests consistent with `SHA256SUMS`, the reused 5.4 bundle unchanged, the
+updater (parses, Linux slot, offers every shipped series, identical to the rootfs copy), each
+module set byte-identical to the matching bundle (with vermagic agreement), the Chinese
 translation files, the theme and timezone settings, the absence of upgrade payloads and of
 any VPN engine, and the required core packages. `scripts/test-verify-output.py` then
-re-runs the verifier against four deliberately broken copies and requires each to be
+re-runs the verifier against seven deliberately broken copies and requires each to be
 rejected. The release is only published when both pass.
 
 Limits worth knowing: the build is auditable but not bit-for-bit reproducible — package

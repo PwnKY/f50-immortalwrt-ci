@@ -13,16 +13,17 @@ Every file in this repository, and everything a build produces, is described in
 
 ## What it produces
 
-`dist/immortalwrt-<wrt>-k<stable>/assets/v<wrt>/` — the six files the portable installer
-expects, with `SHA256SUMS`:
+`dist/immortalwrt-<wrt>-k<stable>[-k<opt-in>...]/assets/v<wrt>/` — the files the portable
+installer and the device updater expect, with `SHA256SUMS`:
 
 | file | how it is obtained |
 |---|---|
 | `mu300-kernel.tar.gz` | reused byte-for-byte from the upstream release (the vendor 5.4 kernel) |
 | `mu300-kernel-<lts>.tar.gz` | **built here** from the kernel.org longterm source |
-| `mu300-kernel-<stable>.tar.gz` | **built here** from the newest kernel.org point release of the series pinned in `inputs/pins.json` (`kernels.stable_series`, currently 7.2: the device updater and the flasher know the bundles by series) |
+| `mu300-kernel-<stable>.tar.gz` | **built here** from the newest kernel.org point release of the series pinned in `inputs/pins.json` (`kernels.stable_series`, currently 7.2): the default mainline kernel |
+| `mu300-kernel-<opt-in>.tar.gz` | **built here** the same way for each `kernels.extra_series` (currently 7.3); a device runs it only after `mu300-update kernel 7.3` |
 | `mu300-openwrt-rootfs.tar.gz` | **built here**: ImmortalWrt base + the port's overlays + customization |
-| `mu300-update` | reused byte-for-byte from the upstream release |
+| `mu300-update` | the pinned tree's own updater with `scripts/local-adaptations.patch` (the same file the rootfs carries; it offers 5.4, 6.18, 7.2 and 7.3) |
 | `SHA256SUMS` | generated here |
 
 The image ships Chinese LuCI, Argon as the default theme with Aurora retained, and

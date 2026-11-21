@@ -102,11 +102,17 @@ EOF
 chmod 755 "$R/etc/uci-defaults/99-mu300-immortal-localization"
 # Exact release identity and vermagic come from the distributed bundles, not guesses.
 # Validate every module; copying does NOT relax upstream package/vermagic checks.
-for input in /custom/modules-5.4 /custom/modules-6.18 /custom/modules-7.2; do
+# One /custom/modules-<series> per kernel of the release (5.4, the LTS, the primary mainline
+# series and every opt-in one); the vendor 5.4 and the LTS are always there.
+[ -d /custom/modules-5.4 ] && [ -d /custom/modules-6.18 ] || { echo "modules of 5.4 or 6.18 missing" >&2; exit 1; }
+for input in /custom/modules-*; do
+    [ -d "$input" ] || continue
+    series=${input#/custom/modules-}
+    case "$series" in [0-9]*.[0-9]*) ;; *) echo "Unexpected module set: $input" >&2; exit 1 ;; esac
     krel=$(cat "$input/kernel.release")
     [ -n "$krel" ]
-    case "$input:$krel" in
-        /custom/modules-5.4:5.4.*|/custom/modules-6.18:6.18.*|/custom/modules-7.2:7.2.*) ;;
+    case "$krel" in
+        "$series".*) ;;
         *) echo "Unexpected kernel release: $input:$krel" >&2; exit 1 ;;
     esac
     mkdir -p "$R/lib/modules/$krel"

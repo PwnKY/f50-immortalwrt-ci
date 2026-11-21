@@ -8,7 +8,7 @@
     "release_repo": "https://github.com/dikeckaan/mu300-linux",
     "release": "v2026.10.08",
     "five4_bundle_sha256": "e7de479fb54624473fa26445f400ffd50631d47be8ae622a5e33aab685e8a686",
-    "updater_sha256": "99e32cb6fb630437a192c832a0b38d61f532c72b2ec19301bfed081cebc56f45"
+    "note_updater": "mu300-update is not taken from the upstream release: that file (sha256 99e32cb6...) is older than the pinned tree's own updater (it still writes boot_b only, without the Linux slot detection), and devices replace their updater with the release's one before they update. The build publishes the tree's rootfs/overlay/opt/mu300/bin/mu300-update with scripts/local-adaptations.patch applied - the same file the rootfs carries, and what upstream's own tools/make-release.sh publishes."
   },
   "immortalwrt": {
     "validated_version": "25.12.2",
@@ -29,8 +29,11 @@
   },
   "kernels": {
     "stable_series": "7.2",
+    "extra_series": [
+      "7.3"
+    ],
     "lts_series": "6.18",
-    "stable_note": "The primary kernel is the newest point release of stable_series, not kernel.org's newest stable series: the device updater (mu300-update, pinned upstream) and the flasher know the mainline bundles by series (KERNELS=\"5.4 6.18 7.2\", mu300-kernel-7.2.tar.gz), so a bundle of another series would not reach any device. 7.3 builds (its adaptations are in scripts/local-adaptations.patch), but moving the series needs mu300-update and the flasher to learn it first. A manual run can still pick any version with the kv_stable input.",
+    "stable_note": "stable_series is the default mainline kernel of every device (mu300-kernel-7.2.tar.gz); extra_series are built and published next to it (mu300-kernel-7.3.tar.gz) for devices that ask for them by name: 'mu300-update kernel 7.3'. Each is the newest point release of its series from kernel.org's sha256sums.asc, which also lists the releases of an end-of-life series (7.2). Nothing moves a device to another series by itself: the updater (scripts/local-adaptations.patch) knows KERNELS=\"5.4 6.18 7.2 7.3\" and installs the bundle of the device's own choice. A manual run can override the versions (kv_stable, kv_extra).",
     "note": "no digest is pinned here: kernel.org's own sha256sums.asc is the source of truth, so a new point release needs no change"
   }
 }

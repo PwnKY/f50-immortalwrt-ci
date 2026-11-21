@@ -16,6 +16,11 @@ cases = (
     ('orphan upgrade status UI', '11_upgrades.js', 'file'),
     ('replaced sysupgrade', 'Project sysupgrade wrapper changed', 'wrapper'),
     ('missing core status package', 'Missing core packages', 'core'),
+    # release-level mutations: a bundle named for another series, an updater that does not
+    # offer a shipped kernel, and the older upstream updater without the Linux slot
+    ('bundle named for another series', 'carries kernel release', 'bundle-name'),
+    ('updater without a shipped kernel', 'mu300-update does not offer kernel', 'updater-kernels'),
+    ('updater without the Linux slot', 'without the Linux slot', 'updater-old'),
 )
 for label, expected_error, mutation in cases:
     with tempfile.TemporaryDirectory(prefix='verify-output-regression-') as directory:
@@ -24,6 +29,17 @@ for label, expected_error, mutation in cases:
         for source in assets.iterdir():
             if source.name not in ('mu300-openwrt-rootfs.tar.gz', 'SHA256SUMS'):
                 (dest / source.name).write_bytes(source.read_bytes())
+        if mutation == 'bundle-name':
+            (dest / 'mu300-kernel-7.9.tar.gz').write_bytes((assets / 'mu300-kernel-7.2.tar.gz').read_bytes())
+        elif mutation == 'updater-kernels':
+            updater = dest / 'mu300-update'
+            text = updater.read_text()
+            start = text.index('\nKERNELS="') + 1
+            end = text.index('\n', start)
+            updater.write_text(text[:start] + 'KERNELS="5.4 6.18"' + text[end:])
+        elif mutation == 'updater-old':
+            updater = dest / 'mu300-update'
+            updater.write_text(updater.read_text().replace('BOOT_PART=boot_$LINUX_SLOT', 'BOOT_PART=boot_b'))
         with tarfile.open(assets / 'mu300-openwrt-rootfs.tar.gz', 'r:gz') as source, \
                 tarfile.open(dest / 'mu300-openwrt-rootfs.tar.gz', 'w:gz', compresslevel=1) as target:
             for member in source.getmembers():

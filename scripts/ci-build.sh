@@ -10,7 +10,8 @@
 # Nothing device-specific is used or produced: the vendor firmware, the Android
 # subset and the GPU blobs are added by the installer on the device.
 #
-# Output: $WORK/dist/<release>/assets/<tag>/ with the six files and SHA256SUMS.
+# Output: $WORK/dist/<release>/assets/<tag>/ with the release files and SHA256SUMS (six, plus one
+# mu300-kernel-<series>.tar.gz per opt-in kernel).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -91,6 +92,20 @@ if [ -z "${KV_STABLE:-}" ]; then
         grep -oE 'linux-[0-9]+\.[0-9]+\.[0-9]+\.tar\.xz' | sed 's/^linux-//; s/\.tar\.xz$//' |
         awk -F. -v s="$SERIES" '$1 "." $2 == s' | sort -t. -k3,3n | tail -1)
 fi
+# the opt-in kernels (kernels.extra_series, e.g. 7.3): the newest point release of each, built and
+# published next to the primary one; a device runs one only after "mu300-update kernel <series>"
+if [ -z "${KV_EXTRA+set}" ]; then
+    KV_EXTRA=
+    for SERIES in $(python3 -c "import json,sys;print(' '.join(json.load(open(sys.argv[1]))['kernels'].get('extra_series', [])))" "$HERE/inputs/pins.json"); do
+        case "$SERIES" in [0-9]*.[0-9]*) ;; *) die "kernels.extra_series in inputs/pins.json";; esac
+        v=$(curl -fsSL --retry 3 "$KERNEL_BASE/v${SERIES%%.*}.x/sha256sums.asc" |
+            grep -oE 'linux-[0-9]+\.[0-9]+\.[0-9]+\.tar\.xz' | sed 's/^linux-//; s/\.tar\.xz$//' |
+            awk -F. -v s="$SERIES" '$1 "." $2 == s' | sort -t. -k3,3n | tail -1)
+        [ -n "$v" ] || die "no $SERIES release in kernel.org sha256sums.asc"
+        KV_EXTRA="${KV_EXTRA:+$KV_EXTRA }$v"
+    done
+fi
+KV_EXTRA=$(echo $KV_EXTRA)
 if [ -z "${KV_LTS:-}" ]; then
     KV_LTS=$(python3 - "$KJ" <<'PY'
 import json,sys
@@ -106,12 +121,18 @@ if [ -z "${WRT_VER:-}" ]; then
         sort -V | tail -1)
 fi
 [ -n "$KV_STABLE" ] && [ -n "$KV_LTS" ] && [ -n "$WRT_VER" ] || die "could not resolve versions"
-for v in "$KV_STABLE" "$KV_LTS" "$WRT_VER"; do
+for v in "$KV_STABLE" "$KV_LTS" "$WRT_VER" $KV_EXTRA; do
     case "$v" in *[!0-9.]*) die "unexpected version '$v'";; esac
 done
 KV_STABLE_SERIES=${KV_STABLE%.*}
 KV_LTS_SERIES=${KV_LTS%.*}
 [ "$KV_STABLE_SERIES" != "$KV_LTS_SERIES" ] || die "stable and LTS resolved to the same series"
+# every kernel of a release is a different series: the bundles are named by series
+seen=" $KV_STABLE_SERIES $KV_LTS_SERIES "
+for v in $KV_EXTRA; do
+    case "$seen" in *" ${v%.*} "*) die "opt-in kernel $v is of a series this release already has";; esac
+    seen="$seen${v%.*} "
+done
 
 UPSTREAM_REPO=${UPSTREAM_REPO:-$(pin upstream.repo)}
 RELEASE_REPO=$(pin upstream.release_repo)
@@ -144,12 +165,14 @@ fi
 git -C "$SRC" rev-parse HEAD | grep -qx "$UPSTREAM_REF" || die "could not check out $UPSTREAM_REF"
 
 REL=immortalwrt-$WRT_VER-k$KV_STABLE
+for v in $KV_EXTRA; do REL=$REL-k$v; done   # as the workflow names it
 ASSETS=$OUT/$REL/assets/v$WRT_VER
 mkdir -p "$ASSETS" "$KSRC" "$IN/themes" "$IN/baseline"
 MU300_VERSION=custom-immortalwrt-$WRT_VER-k$KV_STABLE-$(git -C "$SRC" rev-parse --short HEAD)
 python3 - "$WORK/versions.json" <<PY
 import json
 json.dump({"immortalwrt": "$WRT_VER", "kernel_stable": "$KV_STABLE", "kernel_lts": "$KV_LTS",
+           "kernel_extra": "$KV_EXTRA".split(),
            "upstream_commit": "$UPSTREAM_REF", "release": "$REL", "image_version": "$MU300_VERSION"},
           open("$WORK/versions.json", "w"), indent=2, sort_keys=True)
 PY
@@ -211,6 +234,7 @@ fetch_kernel() { # fetch_kernel VER
 
 say "kernel sources"
 fetch_kernel "$KV_STABLE"
+for v in $KV_EXTRA; do fetch_kernel "$v"; done
 fetch_kernel "$KV_LTS"
 
 say "firmware inputs"
@@ -230,12 +254,20 @@ fetch_checked "https://github.com/eamonxg/luci-theme-aurora/releases/download/$(
     "$IN/themes/$(pin themes.aurora.file)" "$(pin themes.aurora.sha256)"
 fetch_checked "https://github.com/jerrykuku/luci-theme-argon/releases/download/$(pin themes.argon.tag)/$(pin themes.argon.file)" \
     "$IN/themes/$(pin themes.argon.file)" "$(pin themes.argon.sha256)"
-# the 5.4 bundle and the updater are reused from the upstream release, not rebuilt:
-# they carry the vendor 5.4 kernel the installer needs and the static busybox/logdw
+# the 5.4 bundle is reused from the upstream release, not rebuilt: it carries the vendor 5.4
+# kernel the installer needs and the static busybox/logdw. The updater is NOT taken from that
+# release (it is older than the pinned tree's own, see upstream.note_updater in pins.json):
+# the tree's rootfs/overlay/opt/mu300/bin/mu300-update, with the local adaptations, is published.
 fetch_checked "$RELEASE_REPO/releases/download/$UP_TAG/mu300-kernel.tar.gz" \
     "$IN/baseline/mu300-kernel.tar.gz" "$(pin upstream.five4_bundle_sha256)"
-fetch_checked "$RELEASE_REPO/releases/download/$UP_TAG/mu300-update" \
-    "$IN/baseline/mu300-update" "$(pin upstream.updater_sha256)"
+UPDATER=$SRC/rootfs/overlay/opt/mu300/bin/mu300-update
+sh -n "$UPDATER" || die "$UPDATER does not parse"
+for s in $KV_STABLE_SERIES $KV_LTS_SERIES; do
+    grep -q "^KERNELS=\".* $s\( .*\)\?\"$" "$UPDATER" || die "mu300-update does not offer kernel $s"
+done
+for v in $KV_EXTRA; do
+    grep -q "^KERNELS=\".* ${v%.*}\( .*\)\?\"$" "$UPDATER" || die "mu300-update does not offer kernel ${v%.*}"
+done
 
 # ---------------------------------------------------------------- static helpers
 say "static helpers ($STATIC_CC)"
@@ -274,6 +306,11 @@ run_kernel() { # run_kernel KV OUTDIR SCRIPT
 say "kernel $KV_STABLE (primary, pinned stable series)"
 run_kernel "$KV_STABLE" "out-$KV_STABLE" build.sh | tee "$WORK/log-kernel-$KV_STABLE-build.log"
 run_kernel "$KV_STABLE" "out-$KV_STABLE" build-modules.sh | tee "$WORK/log-kernel-$KV_STABLE-modules.log"
+for v in $KV_EXTRA; do
+    say "kernel $v (opt-in, mu300-update kernel ${v%.*})"
+    run_kernel "$v" "out-$v" build.sh | tee "$WORK/log-kernel-$v-build.log"
+    run_kernel "$v" "out-$v" build-modules.sh | tee "$WORK/log-kernel-$v-modules.log"
+done
 say "kernel $KV_LTS (fallback, longterm series)"
 run_kernel "$KV_LTS" "" build.sh | tee "$WORK/log-kernel-$KV_LTS-build.log"
 run_kernel "$KV_LTS" "" build-modules.sh | tee "$WORK/log-kernel-$KV_LTS-modules.log"
@@ -285,10 +322,17 @@ say "kernel bundles"
 docker run --rm "${PLATFORM[@]}" -e MU300_UPSTREAM_OUT=/w/src/upstream/out-$KV_STABLE -v "$WORK":/w "$IMG" \
     sh /w/src/upstream/make-bundle.sh "/w/dist/$REL/assets/v$WRT_VER/mu300-kernel-$KV_STABLE_SERIES.tar.gz" /w/inputs/baseline/mu300-kernel.tar.gz \
     | tee "$WORK/log-bundle-$KV_STABLE.log"
+for v in $KV_EXTRA; do
+    docker run --rm "${PLATFORM[@]}" -e MU300_UPSTREAM_OUT=/w/src/upstream/out-$v -v "$WORK":/w "$IMG" \
+        sh /w/src/upstream/make-bundle.sh "/w/dist/$REL/assets/v$WRT_VER/mu300-kernel-${v%.*}.tar.gz" /w/inputs/baseline/mu300-kernel.tar.gz \
+        | tee "$WORK/log-bundle-$v.log"
+done
 docker run --rm "${PLATFORM[@]}" -e MU300_UPSTREAM_OUT=/w/src/upstream/out -v "$WORK":/w "$IMG" \
     sh /w/src/upstream/make-bundle.sh "/w/dist/$REL/assets/v$WRT_VER/mu300-kernel-$KV_LTS_SERIES.tar.gz" /w/inputs/baseline/mu300-kernel.tar.gz \
     | tee "$WORK/log-bundle-$KV_LTS.log"
-for pair in "$KV_STABLE:$KV_STABLE_SERIES" "$KV_LTS:$KV_LTS_SERIES"; do
+PAIRS=("$KV_STABLE:$KV_STABLE_SERIES" "$KV_LTS:$KV_LTS_SERIES")
+for v in $KV_EXTRA; do PAIRS+=("$v:${v%.*}"); done
+for pair in "${PAIRS[@]}"; do
     kv=${pair%%:*}; series=${pair##*:}
     tar -xzOf "$ASSETS/mu300-kernel-$series.tar.gz" ./kernel.release > "$WORK/kernel-$series.release"
     [ -s "$WORK/kernel-$series.release" ] || die "no kernel.release in the $series bundle"
@@ -307,6 +351,11 @@ cp -a "$SRC/upstream/out/." "$C/modules-$KV_LTS_SERIES/"                     # L
 cp "$WORK/kernel-$KV_LTS_SERIES.release" "$C/modules-$KV_LTS_SERIES/kernel.release"
 cp -a "$SRC/upstream/out-$KV_STABLE/." "$C/modules-$KV_STABLE_SERIES/"       # stable: fresh build
 cp "$WORK/kernel-$KV_STABLE_SERIES.release" "$C/modules-$KV_STABLE_SERIES/kernel.release"
+for v in $KV_EXTRA; do                                                       # opt-in: fresh build
+    mkdir -p "$C/modules-${v%.*}"
+    cp -a "$SRC/upstream/out-$v/." "$C/modules-${v%.*}/"
+    cp "$WORK/kernel-${v%.*}.release" "$C/modules-${v%.*}/kernel.release"
+done
 for d in "$C"/modules-*; do
     [ -s "$d/kernel.release" ] || die "missing kernel.release in $d"
     ls "$d"/modules/*.ko >/dev/null || die "no modules in $d"
@@ -323,12 +372,15 @@ MU300_LUCI_THEME_APK="$IN/themes/$(pin themes.aurora.file)" \
 MU300_CUSTOMIZE_DIR="$C" MU300_VERSION="$MU300_VERSION" \
     "$SRC/openwrt/build-rootfs.sh" mu300-openwrt-rootfs.tar.gz | tee "$WORK/log-rootfs.log"
 cp "$SRC/openwrt/mu300-openwrt-rootfs.tar.gz" "$ASSETS/"
-cp "$IN/baseline/mu300-kernel.tar.gz" "$IN/baseline/mu300-update" "$ASSETS/"
+cp "$IN/baseline/mu300-kernel.tar.gz" "$ASSETS/"
+cp "$UPDATER" "$ASSETS/mu300-update"
 
 # ---------------------------------------------------------------- verify
 say "checksums and verification"
+EXTRA_BUNDLES=()
+for v in $KV_EXTRA; do EXTRA_BUNDLES+=("mu300-kernel-${v%.*}.tar.gz"); done
 (cd "$ASSETS" && sha256sum mu300-kernel.tar.gz "mu300-kernel-$KV_LTS_SERIES.tar.gz" \
-    "mu300-kernel-$KV_STABLE_SERIES.tar.gz" mu300-openwrt-rootfs.tar.gz mu300-update > SHA256SUMS)
+    "mu300-kernel-$KV_STABLE_SERIES.tar.gz" "${EXTRA_BUNDLES[@]}" mu300-openwrt-rootfs.tar.gz mu300-update > SHA256SUMS)
 (cd "$ASSETS" && sha256sum -c SHA256SUMS)
 python3 "$HERE/scripts/verify-output.py" "$ASSETS" | tee "$WORK/log-output-validation.txt"
 python3 "$HERE/scripts/test-verify-output.py" "$ASSETS" | tee "$WORK/log-verify-regression.txt"
