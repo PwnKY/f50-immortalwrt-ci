@@ -224,6 +224,22 @@ index cc98c80..534f3bd 100755
  #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
  	.update_mgmt_frame_registrations = sprd_cfg80211_mgmt_frame_register,
  #else
+diff --git a/upstream/modules/sprd_wlan_combo/sc2355/tx.c b/upstream/modules/sprd_wlan_combo/sc2355/tx.c
+index 1acde90..e47010f 100644
+--- a/upstream/modules/sprd_wlan_combo/sc2355/tx.c
++++ b/upstream/modules/sprd_wlan_combo/sc2355/tx.c
+@@ -628,7 +628,10 @@ static void tx_get_pcie_dma_addr(struct sprd_hif *hif, struct sk_buff *skb)
+ 
+ 	dma_addr = PFN_PHYS(virt_to_pfn(skb->head)) + offset_in_page(skb->head);
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 3, 0))
++	/* MU300: 7.3 adds the DMA attrs (upstream 20beb6884b83); none are used for this buffer */
++	if (!dma_capable(wiphy_dev(hif->priv->wiphy), dma_addr, skb->len, true, 0)) {
++#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+ 	if (!dma_capable(wiphy_dev(hif->priv->wiphy), dma_addr, skb->len, true)) {
+ #else
+ 	if (!dma_capable(wiphy_dev(hif->priv->wiphy), dma_addr, skb->len)) {
 diff --git a/upstream/mu300-mainline.config b/upstream/mu300-mainline.config
 index 04e6831..ce830db 100644
 --- a/upstream/mu300-mainline.config
